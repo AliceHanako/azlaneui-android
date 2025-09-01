@@ -1,16 +1,13 @@
 name: Build Android meta
 run-name: Creating Production Ready Android App 🚀 M
-
 on:
-  # 定时触发：每周一上午 9 点（UTC 时间）
-  schedule:
-    - cron: '0 9 * * 1'
-  # 手动触发
   workflow_dispatch:
+  schedule:
+    - cron: '0 0 * * 0'  # 每周日 UTC 00:00 自动运行
 
 jobs:
   build:
-    name: Build APK meta if upstream changed
+    name: Build APK meta
     runs-on: ubuntu-latest
     steps:
       - name: Checkout source
@@ -18,42 +15,6 @@ jobs:
         with:
           ref: meta
 
-      - name: Check latest upstream release
-        id: upstream
-        run: |
-          UPSTREAM_REPO="MetaCubeX/metacubexd"
-          echo "Fetching latest release tag from $UPSTREAM_REPO..."
-          LATEST_TAG=$(curl -sL "https://api.github.com/repos/$UPSTREAM_REPO/releases/latest" | jq -r .tag_name)
-          if [ -z "$LATEST_TAG" ] || [ "$LATEST_TAG" == "null" ]; then
-            echo "::error::Could not fetch latest tag from $UPSTREAM_REPO."
-            exit 1
-          fi
-          echo "Latest upstream tag: $LATEST_TAG"
-
-          # 检查本地缓存的 tag（上一次构建的 tag）
-          CACHE_FILE=".last_build_tag"
-          if [ -f "$CACHE_FILE" ]; then
-            LAST_TAG=$(cat $CACHE_FILE)
-          else
-            LAST_TAG=""
-          fi
-
-          if [ "$LATEST_TAG" == "$LAST_TAG" ]; then
-            echo "Upstream has not changed, skipping build."
-            echo "SKIP_BUILD=true" >> $GITHUB_OUTPUT
-          else
-            echo "Upstream changed, will build."
-            echo "$LATEST_TAG" > $CACHE_FILE
-            echo "SKIP_BUILD=false" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Skip job if upstream not changed
-        if: steps.upstream.outputs.SKIP_BUILD == 'true'
-        run: |
-          echo "No new upstream release. Exiting."
-          exit 0
-
-      # 以下是你的原有构建步骤（安装工具、Node、Java、Capacitor、签名、上传 APK 等）
       - name: Install Build Tools and jq
         run: sudo apt-get update && sudo apt-get install -y hub zipalign apksigner jq
 
@@ -90,10 +51,7 @@ jobs:
           rm -rf $EXTRACTED_DIR
 
       - name: Clean Android Directory Before Add/Sync
-        run: |
-          if [ -d "android" ]; then
-            rm -rf android/
-          fi
+        run: rm -rf android/
 
       - name: Explicitly Add Android Platform
         run: npx cap add android
@@ -101,8 +59,15 @@ jobs:
       - name: Capacitor Sync Android
         run: npx cap sync android
 
-      - name: Generate icons and splash screen
-        run: if [ -d "./resources" ]; then npm install @capacitor/assets --save-dev && npx capacitor-assets generate --android; fi
+      - name: Generate icons and splash screen to android folder
+        run: |
+          if [ -d "./resources" ]; then
+            npm install @capacitor/assets --save-dev
+            npx capacitor-assets generate --android
+          fi
+
+      - name: Copy web assets and icons to Android
+        run: npx cap copy android
 
       - name: AndroidManifestModify
         run: |
@@ -110,10 +75,31 @@ jobs:
             cp AndroidManifest.xml android/app/src/main/AndroidManifest.xml
           fi
 
-      - name: Build unsigned app
-        run: cd android && ./gradlew assembleRelease
+      - name: Fetch Latest Tag from metacubexd
+        id: get_metacubexd_tag
+        run: |
+          METACUBEXD_REPO="MetaCubeX/metacubexd"
+          LATEST_TAG=$(curl -sL "https://api.github.com/repos/$METACUBEXD_REPO/releases/latest" | jq -r .tag_name)
+          if [ -z "$LATEST_TAG" ] || [ "$LATEST_TAG" == "null" ]; then
+            echo "::error::Failed to fetch latest tag"
+            exit 1
+          fi
+          echo "LATEST_TAG=$LATEST_TAG" >> $GITHUB_OUTPUT
 
-      - name: Extract Android signing key
+      - name: Generate versionCode and versionName
+        id: versioning
+        run: |
+          VERSION_NAME="${{ steps.get_metacubexd_tag.outputs.LATEST_TAG }}"
+          VERSION_CODE=$(date +%s)
+          echo "VERSION_NAME=$VERSION_NAME" >> $GITHUB_OUTPUT
+          echo "VERSION_CODE=$VERSION_CODE" >> $GITHUB_OUTPUT
+
+      - name: Build unsigned app with version
+        run: |
+          cd android
+          ./gradlew assembleRelease -PVERSION_NAME=${{ steps.versioning.outputs.VERSION_NAME }} -PVERSION_CODE=${{ steps.versioning.outputs.VERSION_CODE }}
+
+      - name: Extract Android signing key from env
         run: |
           echo "${{ secrets.RELEASE_KEYSTORE }}" > android/release.jks.base64
           base64 -d android/release.jks.base64 > android/release.decrypted.jks
@@ -124,17 +110,32 @@ jobs:
           ALIGNED_APK="./android/app/build/outputs/apk/release/app-release-unsigned-aligned.apk"
           SIGNED_APK="./android/app/build/outputs/apk/release/app-release-signed.apk"
           zipalign -v 4 "$UNSIGNED_APK" "$ALIGNED_APK"
-          apksigner sign --ks android/release.decrypted.jks \
+          apksigner sign \
+            --ks android/release.decrypted.jks \
             --ks-key-alias release \
             --ks-pass pass:${{ secrets.RELEASE_KEYSTORE_PASSWORD }} \
             --out "$SIGNED_APK" \
             "$ALIGNED_APK"
 
+      - name: Rename Signed APK
+        id: rename_apk
+        run: |
+          VERSION_NAME="${{ steps.versioning.outputs.VERSION_NAME }}"
+          SOURCE_APK="./android/app/build/outputs/apk/release/app-release-signed.apk"
+          SANITIZED_VERSION_NAME=$(echo "$VERSION_NAME" | sed 's/[^a-zA-Z0-9._-]/_/g')
+          FINAL_APK_NAME="Azlaneui-${SANITIZED_VERSION_NAME}.apk"
+          mv "$SOURCE_APK" "$FINAL_APK_NAME"
+          echo "FINAL_APK_PATH=$FINAL_APK_NAME" >> $GITHUB_OUTPUT
+
       - name: Upload APK to GitHub Release
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: latest-meta
-          name: Azlaneui ${{ steps.upstream.outputs.LATEST_TAG }} (meta)
-          files: ./android/app/build/outputs/apk/release/app-release-signed.apk
+          tag_name: latest-metaboard
+          name: Azlaneui ${{ steps.versioning.outputs.VERSION_NAME }} (meta)
+          body: |
+            Android build corresponding to metacubexd release tag: **${{ steps.versioning.outputs.VERSION_NAME }} (meta)**
+          files: ${{ steps.rename_apk.outputs.FINAL_APK_PATH }}
+          prerelease: false
+          draft: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
