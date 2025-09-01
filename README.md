@@ -1,7 +1,12 @@
 # Auto converting panels to apk
 
-**如果版本不是最新,你可以通过开启一个issue来获取最新构建**
+**在inoribea/azlaneui-android基础上添加每周更新一次构建，添加Yacd面板构建，添加APP启动图标**
 
+感谢inoribea，MetaCubeX，Yacd-meta。
+
+https://github.com/Zephyruso/zashboard
+https://github.com/MetaCubeX/metacubexd
+https://github.com/MetaCubeX/Yacd-meta
 
 原README内容:
 
