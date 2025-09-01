@@ -3,12 +3,12 @@
 **在inoribea/azlaneui-android基础上添加每周更新一次构建，添加Yacd面板构建，添加APP启动图标**
 
 感谢inoribea，MetaCubeX，Yacd-meta。
-zashboard：
-https://github.com/Zephyruso/zashboard
-metacubexd：
-https://github.com/MetaCubeX/metacubexd
-yacd-meta：
-https://github.com/MetaCubeX/Yacd-meta
+zashboard：<br>
+https://github.com/Zephyruso/zashboard<br>
+metacubexd：<br>
+https://github.com/MetaCubeX/metacubexd<br>
+yacd-meta：<br>
+https://github.com/MetaCubeX/Yacd-meta<br>
 
 原README内容:
 
