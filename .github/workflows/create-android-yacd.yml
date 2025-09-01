@@ -1,5 +1,5 @@
-name: Build Android meta
-run-name: Creating Production Ready Android App 🚀 M
+name: Build Android Yacd
+run-name: Creating Production Ready Android App 🚀 Y
 on:
   workflow_dispatch:
 
