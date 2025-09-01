@@ -68,21 +68,22 @@ jobs:
       - name: Explicitly Add Android Platform
         run: npx cap add android
 
+      # === Capacitor Sync and Icon Generation ===
       - name: Capacitor Sync Android
-        run: npx cap sync android 
+        run: npx cap sync android
 
       - name: Generate icons and optional splash screen
         run: |
           if [ -d "./resources" ]; then
-            echo "Generating app icons and splash (if available)..."
-            # 安装 capacitor-assets 插件（固定版本避免警告）
-            npm install @capacitor/assets@1.0.0 --save-dev
-            # 自动生成 Android 图标和启动屏幕（如果有）
+            echo "Generating app icons..."
+            npm install @capacitor/assets --save-dev
             npx capacitor-assets generate --android
-            echo "Icon and splash screen generation completed."
           else
-            echo "No resources folder found. Skipping icon and splash screen generation."
+            echo "No resources folder found, skipping icon generation."
           fi
+
+      - name: Copy web assets and icons to Android
+        run: npx cap copy android
 
       - name: AndroidManifestModify
         run: |
@@ -159,7 +160,7 @@ jobs:
           SANITIZED_VERSION_NAME=$(echo "$VERSION_NAME" | sed 's/[^a-zA-Z0-9._-]/_/g')
           FINAL_APK_NAME="Azlaneui-${SANITIZED_VERSION_NAME}.apk"
           if [ ! -f "$SOURCE_APK" ]; then
-             echo "::error::Source APK '$SOURCE_APK' not found!"
+             echo "::error::Source APK '$SOURCE_APK' not found! "
              ls -l ./android/app/build/outputs/apk/release/
              exit 1
           fi
@@ -171,7 +172,7 @@ jobs:
       - name: Verify Renamed APK
         run: |
           echo "Verifying renamed file:"
-          ls -l "${{ steps.rename_apk.outputs.FINAL_APK_PATH }}" || (echo "::error::Verification failed: Renamed file '${{ steps.rename_apk.outputs.FINAL_APK_PATH }}' not found!" && exit 1)
+          ls -l "${{ steps.rename_apk.outputs.FINAL_APK_PATH }}" || (echo "::error::Verification failed: Renamed file not found!" && exit 1)
 
       - name: Upload APK to GitHub Release
         uses: softprops/action-gh-release@v1
