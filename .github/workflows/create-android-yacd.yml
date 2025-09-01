@@ -68,12 +68,19 @@ jobs:
       - name: Explicitly Add Android Platform
         run: npx cap add android
 
-
       - name: Capacitor Sync Android
         run: npx cap sync android 
 
-      - name: Generate icons and splash screen to android folder
-        run: if [ -d "./resources" ]; then npm install @capacitor/assets --save-dev && npx capacitor-assets generate --android; fi
+      - name: Generate icons and splash screen
+        run: |
+          if [ -d "./resources" ]; then
+            echo "Generating app icons and splash screen..."
+            npm install @capacitor/assets --save-dev
+            npx capacitor-assets generate --android
+            echo "Icons and splash screen generated successfully."
+          else
+            echo "No resources folder found. Skipping icon generation."
+          fi
 
       - name: AndroidManifestModify
         run: |
