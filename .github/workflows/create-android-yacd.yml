@@ -74,25 +74,12 @@ jobs:
       - name: Generate icons and optional splash screen
         run: |
           if [ -d "./resources" ]; then
-            echo "Generating app icons..."
-            npm install @capacitor/assets --save-dev
-
-            # 生成图标
-            if [ -f "./resources/icon.png" ]; then
-              npx capacitor-assets generate --icon --android
-              echo "App icons generated successfully."
-            else
-              echo "icon.png not found in resources folder. Skipping icon generation."
-              exit 1
-            fi
-
-            # 生成 splash screen（可选）
-            if [ -f "./resources/splash.png" ]; then
-              npx capacitor-assets generate --splash --android
-              echo "Splash screen generated successfully."
-            else
-              echo "splash.png not found. Skipping splash screen generation."
-            fi
+            echo "Generating app icons and splash (if available)..."
+            # 安装 capacitor-assets 插件（固定版本避免警告）
+            npm install @capacitor/assets@1.0.0 --save-dev
+            # 自动生成 Android 图标和启动屏幕（如果有）
+            npx capacitor-assets generate --android
+            echo "Icon and splash screen generation completed."
           else
             echo "No resources folder found. Skipping icon and splash screen generation."
           fi
