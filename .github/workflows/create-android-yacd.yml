@@ -1,59 +1,18 @@
 name: Build Android yacd
 run-name: Creating Production Ready Android App 🚀 Y
-
 on:
-  # 每周一 UTC 10 点运行
-  schedule:
-    - cron: '0 10 * * 1'
-  # 手动触发
   workflow_dispatch:
 
 jobs:
   build:
-    name: Build APK yacd if upstream changed
+    name: Build APK yacd
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout source
         uses: actions/checkout@v3
         with:
           ref: yacd
 
-      - name: Check latest upstream release
-        id: upstream
-        run: |
-          UPSTREAM_REPO="MetaCubeX/Yacd-meta"
-          echo "Fetching latest release tag from $UPSTREAM_REPO..."
-          LATEST_TAG=$(curl -sL "https://api.github.com/repos/$UPSTREAM_REPO/releases/latest" | jq -r .tag_name)
-          if [ -z "$LATEST_TAG" ] || [ "$LATEST_TAG" == "null" ]; then
-            echo "::error::Could not fetch latest tag from $UPSTREAM_REPO."
-            exit 1
-          fi
-          echo "Latest upstream tag: $LATEST_TAG"
-
-          CACHE_FILE=".last_build_tag"
-          if [ -f "$CACHE_FILE" ]; then
-            LAST_TAG=$(cat $CACHE_FILE)
-          else
-            LAST_TAG=""
-          fi
-
-          if [ "$LATEST_TAG" == "$LAST_TAG" ]; then
-            echo "Upstream has not changed, skipping build."
-            echo "SKIP_BUILD=true" >> $GITHUB_OUTPUT
-          else
-            echo "Upstream changed, will build."
-            echo "$LATEST_TAG" > $CACHE_FILE
-            echo "SKIP_BUILD=false" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Skip job if upstream not changed
-        if: steps.upstream.outputs.SKIP_BUILD == 'true'
-        run: |
-          echo "No new upstream release. Exiting."
-          exit 0
-
-      # ---- 原有构建流程开始 ----
       - name: Install Build Tools and jq
         run: sudo apt-get update && sudo apt-get install -y hub zipalign apksigner jq
 
@@ -73,12 +32,16 @@ jobs:
 
       - name: Download and prepare web assets (Yacd-meta dist)
         run: |
+          echo "Downloading gh-pages..."
           wget https://github.com/MetaCubeX/Yacd-meta/archive/refs/heads/gh-pages.zip
+          echo "Unzipping gh-pages..."
           unzip -q gh-pages.zip
           EXTRACTED_DIR="Yacd-meta-gh-pages"
           WEB_DIR="www"
+          echo "Preparing $WEB_DIR directory..."
           rm -rf $WEB_DIR
           mkdir -p $WEB_DIR
+          echo "Moving assets from $EXTRACTED_DIR to $WEB_DIR..."
           if [ -d "$EXTRACTED_DIR/dist" ]; then
             mv $EXTRACTED_DIR/dist/* $WEB_DIR/
           else
@@ -86,23 +49,37 @@ jobs:
             mv $EXTRACTED_DIR/* $WEB_DIR/
             shopt -u dotglob
           fi
+          echo "Cleaning up downloaded files..."
           rm gh-pages.zip
           rm -rf $EXTRACTED_DIR
+          echo "Contents of $WEB_DIR:"
+          ls -l $WEB_DIR
 
       - name: Clean Android Directory Before Add/Sync
-        run: rm -rf android/
+        run: |
+          if [ -d "android" ]; then
+            echo "Existing 'android' directory found. Removing it to ensure clean add/sync..."
+            rm -rf android/
+            echo "'android' directory removed."
+          else
+            echo "'android' directory not found. Proceeding."
+          fi
 
       - name: Explicitly Add Android Platform
         run: npx cap add android
 
+      # === Capacitor Sync and Icon Generation ===
       - name: Capacitor Sync Android
         run: npx cap sync android
 
       - name: Generate icons and optional splash screen
         run: |
           if [ -d "./resources" ]; then
+            echo "Generating app icons..."
             npm install @capacitor/assets --save-dev
             npx capacitor-assets generate --android
+          else
+            echo "No resources folder found, skipping icon generation."
           fi
 
       - name: Copy web assets and icons to Android
@@ -111,7 +88,10 @@ jobs:
       - name: AndroidManifestModify
         run: |
           if [ -f "AndroidManifest.xml" ]; then
+            echo "Copying custom AndroidManifest.xml"
             cp AndroidManifest.xml android/app/src/main/AndroidManifest.xml
+          else
+            echo "Custom AndroidManifest.xml not found, using default."
           fi
 
       - name: Build unsigned app
@@ -127,28 +107,85 @@ jobs:
           UNSIGNED_APK="./android/app/build/outputs/apk/release/app-release-unsigned.apk"
           ALIGNED_APK="./android/app/build/outputs/apk/release/app-release-unsigned-aligned.apk"
           SIGNED_APK="./android/app/build/outputs/apk/release/app-release-signed.apk"
+          echo "Aligning $UNSIGNED_APK..."
           zipalign -v 4 "$UNSIGNED_APK" "$ALIGNED_APK"
+          echo "Signing $ALIGNED_APK..."
           apksigner sign \
             --ks android/release.decrypted.jks \
             --ks-key-alias release \
             --ks-pass pass:${{ secrets.RELEASE_KEYSTORE_PASSWORD }} \
             --out "$SIGNED_APK" \
             "$ALIGNED_APK"
+          echo "Signed APK created at $SIGNED_APK"
+          ls -l ./android/app/build/outputs/apk/release/
+
+      - name: Fetch Latest Tag from Yacd
+        id: get_yacdmeta_tag
+        run: |
+          METACUBEXD_REPO="MetaCubeX/Yacd-meta"
+          echo "Fetching latest release tag from $METACUBEXD_REPO..."
+          LATEST_TAG=$(curl -sL "https://api.github.com/repos/$METACUBEXD_REPO/releases/latest" | jq -r .tag_name)
+          if [ -z "$LATEST_TAG" ] || [ "$LATEST_TAG" == "null" ]; then
+            echo "::error::Could not fetch latest tag from $METACUBEXD_REPO or no releases found."
+            exit 1
+          fi
+          echo "Successfully fetched LATEST_TAG: $LATEST_TAG"
+          echo "LATEST_TAG=$LATEST_TAG" >> $GITHUB_OUTPUT
+
+      - name: Set Build Timestamp Tag
+        id: current-datetime
+        run: echo "CURRENT_DATETIME=$(date +'%Y-%m-%d-%H_%M_%S%z')" >> "$GITHUB_OUTPUT"
+
+      - name: Upload build output artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-output-${{ steps.get_yacdmeta_tag.outputs.LATEST_TAG }}-${{ steps.current-datetime.outputs.CURRENT_DATETIME }}
+          path: |
+             ./android/app/build/outputs/apk/release/app-release-signed.apk
+             ./android/app/build/outputs/apk/release/output-metadata.json
+             ./android/app/build/outputs/mapping/release/mapping.txt
+          if-no-files-found: warn
+          retention-days: 5
 
       - name: Rename Signed APK
         id: rename_apk
         run: |
-          VERSION_NAME="${{ steps.upstream.outputs.LATEST_TAG }}"
+          VERSION_NAME="${{ steps.get_yacdmeta_tag.outputs.LATEST_TAG }}"
+          echo "Using Yacdmeta LATEST_TAG for renaming: $VERSION_NAME"
+          if [ -z "$VERSION_NAME" ]; then
+            echo "::error::Yacdmeta LATEST_TAG is empty in Rename step."
+            exit 1
+          fi
+          SOURCE_APK="./android/app/build/outputs/apk/release/app-release-signed.apk"
           SANITIZED_VERSION_NAME=$(echo "$VERSION_NAME" | sed 's/[^a-zA-Z0-9._-]/_/g')
           FINAL_APK_NAME="Azlaneui-${SANITIZED_VERSION_NAME}.apk"
-          mv ./android/app/build/outputs/apk/release/app-release-signed.apk "$FINAL_APK_NAME"
+          if [ ! -f "$SOURCE_APK" ]; then
+             echo "::error::Source APK '$SOURCE_APK' not found! "
+             ls -l ./android/app/build/outputs/apk/release/
+             exit 1
+          fi
+          echo "Moving '$SOURCE_APK' to '$FINAL_APK_NAME'"
+          mv "$SOURCE_APK" "$FINAL_APK_NAME"
+          echo "Successfully renamed APK to $FINAL_APK_NAME"
           echo "FINAL_APK_PATH=$FINAL_APK_NAME" >> $GITHUB_OUTPUT
+
+      - name: Verify Renamed APK
+        run: |
+          echo "Verifying renamed file:"
+          ls -l "${{ steps.rename_apk.outputs.FINAL_APK_PATH }}" || (echo "::error::Verification failed: Renamed file not found!" && exit 1)
 
       - name: Upload APK to GitHub Release
         uses: softprops/action-gh-release@v1
         with:
           tag_name: latest-yacdboard
-          name: Azlaneui ${{ steps.upstream.outputs.LATEST_TAG }} (Yacd)
+          name: Azlaneui ${{ steps.get_yacdmeta_tag.outputs.LATEST_TAG }} (yacd)
+          body: |
+            Android build corresponding to yacdmeta release tag: **${{ steps.get_yacdmeta_tag.outputs.LATEST_TAG }} (yacd)**
+            Generated by GitHub Actions run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            Triggered by: ${{ github.actor }}
+            Build Timestamp: ${{ steps.current-datetime.outputs.CURRENT_DATETIME }}
           files: ${{ steps.rename_apk.outputs.FINAL_APK_PATH }}
+          prerelease: false
+          draft: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
