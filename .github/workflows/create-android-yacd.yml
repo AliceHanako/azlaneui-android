@@ -71,15 +71,30 @@ jobs:
       - name: Capacitor Sync Android
         run: npx cap sync android 
 
-      - name: Generate icons and splash screen
+      - name: Generate icons and optional splash screen
         run: |
           if [ -d "./resources" ]; then
-            echo "Generating app icons and splash screen..."
+            echo "Generating app icons..."
             npm install @capacitor/assets --save-dev
-            npx capacitor-assets generate --android
-            echo "Icons and splash screen generated successfully."
+
+            # 生成图标
+            if [ -f "./resources/icon.png" ]; then
+              npx capacitor-assets generate --icon --android
+              echo "App icons generated successfully."
+            else
+              echo "icon.png not found in resources folder. Skipping icon generation."
+              exit 1
+            fi
+
+            # 生成 splash screen（可选）
+            if [ -f "./resources/splash.png" ]; then
+              npx capacitor-assets generate --splash --android
+              echo "Splash screen generated successfully."
+            else
+              echo "splash.png not found. Skipping splash screen generation."
+            fi
           else
-            echo "No resources folder found. Skipping icon generation."
+            echo "No resources folder found. Skipping icon and splash screen generation."
           fi
 
       - name: AndroidManifestModify
