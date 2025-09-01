@@ -1,7 +1,7 @@
 {
-  "appId": "com.fgfgui.metacubexd",
-  "appName": "PANEL",
-  "webDir": "metacubexd-gh-pages",
+  "appId": "com.azlaneui.yacdmeta",
+  "appName": "azulaneui-Y",
+  "webDir": "www",
   "server": {
     "androidScheme": "http"
   },
