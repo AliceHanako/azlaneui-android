@@ -1,4 +1,4 @@
-name: Build Android Yacd
+name: Build Android yacd
 run-name: Creating Production Ready Android App 🚀 Y
 on:
   workflow_dispatch:
