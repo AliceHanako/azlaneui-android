@@ -34,14 +34,11 @@ jobs:
         run: |
           echo "Downloading gh-pages..."
           wget https://github.com/MetaCubeX/metacubexd/archive/refs/heads/gh-pages.zip
-          echo "Unzipping gh-pages..."
           unzip -q gh-pages.zip
           EXTRACTED_DIR="metacubexd-gh-pages"
           WEB_DIR="www"
-          echo "Preparing $WEB_DIR directory..."
           rm -rf $WEB_DIR
           mkdir -p $WEB_DIR
-          echo "Moving assets from $EXTRACTED_DIR to $WEB_DIR..."
           if [ -d "$EXTRACTED_DIR/dist" ]; then
             mv $EXTRACTED_DIR/dist/* $WEB_DIR/
           else
@@ -49,39 +46,36 @@ jobs:
             mv $EXTRACTED_DIR/* $WEB_DIR/
             shopt -u dotglob
           fi
-          echo "Cleaning up downloaded files..."
           rm gh-pages.zip
           rm -rf $EXTRACTED_DIR
-          echo "Contents of $WEB_DIR:"
           ls -l $WEB_DIR
 
       - name: Clean Android Directory Before Add/Sync
         run: |
           if [ -d "android" ]; then
-            echo "Existing 'android' directory found. Removing it to ensure clean add/sync..."
             rm -rf android/
-            echo "'android' directory removed."
-          else
-            echo "'android' directory not found. Proceeding."
           fi
 
       - name: Explicitly Add Android Platform
         run: npx cap add android
 
-
       - name: Capacitor Sync Android
         run: npx cap sync android 
 
       - name: Generate icons and splash screen to android folder
-        run: if [ -d "./resources" ]; then npm install @capacitor/assets --save-dev && npx capacitor-assets generate --android; fi
+        run: |
+          if [ -d "./resources" ]; then
+            echo "Generating app icons and splash screen..."
+            npm install @capacitor/assets --save-dev
+            npx capacitor-assets generate --android
+          else
+            echo "'resources' folder not found. Skipping icon generation."
+          fi
 
       - name: AndroidManifestModify
         run: |
           if [ -f "AndroidManifest.xml" ]; then
-            echo "Copying custom AndroidManifest.xml"
             cp AndroidManifest.xml android/app/src/main/AndroidManifest.xml
-          else
-            echo "Custom AndroidManifest.xml not found, using default."
           fi
 
       - name: Build unsigned app
@@ -97,29 +91,23 @@ jobs:
           UNSIGNED_APK="./android/app/build/outputs/apk/release/app-release-unsigned.apk"
           ALIGNED_APK="./android/app/build/outputs/apk/release/app-release-unsigned-aligned.apk"
           SIGNED_APK="./android/app/build/outputs/apk/release/app-release-signed.apk"
-          echo "Aligning $UNSIGNED_APK..."
           zipalign -v 4 "$UNSIGNED_APK" "$ALIGNED_APK"
-          echo "Signing $ALIGNED_APK..."
           apksigner sign \
             --ks android/release.decrypted.jks \
             --ks-key-alias release \
             --ks-pass pass:${{ secrets.RELEASE_KEYSTORE_PASSWORD }} \
             --out "$SIGNED_APK" \
             "$ALIGNED_APK"
-          echo "Signed APK created at $SIGNED_APK"
           ls -l ./android/app/build/outputs/apk/release/
 
       - name: Fetch Latest Tag from metacubexd
         id: get_metacubexd_tag
         run: |
           METACUBEXD_REPO="MetaCubeX/metacubexd"
-          echo "Fetching latest release tag from $METACUBEXD_REPO..."
           LATEST_TAG=$(curl -sL "https://api.github.com/repos/$METACUBEXD_REPO/releases/latest" | jq -r .tag_name)
           if [ -z "$LATEST_TAG" ] || [ "$LATEST_TAG" == "null" ]; then
-            echo "::error::Could not fetch latest tag from $METACUBEXD_REPO or no releases found."
             exit 1
           fi
-          echo "Successfully fetched LATEST_TAG: $LATEST_TAG"
           echo "LATEST_TAG=$LATEST_TAG" >> $GITHUB_OUTPUT
 
       - name: Set Build Timestamp Tag
@@ -141,28 +129,11 @@ jobs:
         id: rename_apk
         run: |
           VERSION_NAME="${{ steps.get_metacubexd_tag.outputs.LATEST_TAG }}"
-          echo "Using Metacubexd LATEST_TAG for renaming: $VERSION_NAME"
-          if [ -z "$VERSION_NAME" ]; then
-            echo "::error::Metacubexd LATEST_TAG is empty in Rename step."
-            exit 1
-          fi
           SOURCE_APK="./android/app/build/outputs/apk/release/app-release-signed.apk"
           SANITIZED_VERSION_NAME=$(echo "$VERSION_NAME" | sed 's/[^a-zA-Z0-9._-]/_/g')
           FINAL_APK_NAME="Azlaneui-${SANITIZED_VERSION_NAME}.apk"
-          if [ ! -f "$SOURCE_APK" ]; then
-             echo "::error::Source APK '$SOURCE_APK' not found!"
-             ls -l ./android/app/build/outputs/apk/release/
-             exit 1
-          fi
-          echo "Moving '$SOURCE_APK' to '$FINAL_APK_NAME'"
           mv "$SOURCE_APK" "$FINAL_APK_NAME"
-          echo "Successfully renamed APK to $FINAL_APK_NAME"
           echo "FINAL_APK_PATH=$FINAL_APK_NAME" >> $GITHUB_OUTPUT
-
-      - name: Verify Renamed APK
-        run: |
-          echo "Verifying renamed file:"
-          ls -l "${{ steps.rename_apk.outputs.FINAL_APK_PATH }}" || (echo "::error::Verification failed: Renamed file '${{ steps.rename_apk.outputs.FINAL_APK_PATH }}' not found!" && exit 1)
 
       - name: Upload APK to GitHub Release
         uses: softprops/action-gh-release@v1
@@ -172,8 +143,6 @@ jobs:
           body: |
             Android build corresponding to metacubexd release tag: **${{ steps.get_metacubexd_tag.outputs.LATEST_TAG }} (meta)**
             Generated by GitHub Actions run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-            Triggered by: ${{ github.actor }}
-            Build Timestamp: ${{ steps.current-datetime.outputs.CURRENT_DATETIME }}
           files: ${{ steps.rename_apk.outputs.FINAL_APK_PATH }}
           prerelease: false
           draft: false
