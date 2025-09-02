@@ -3,20 +3,21 @@ run-name: Creating Production Ready Android App 🚀 Z
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 0 * * 0'  # 每周日 UTC 00:00 自动运行
+    - cron: '0 0 * * 0'  # 每周日 UTC 0 点检查一次最新 release
 
 jobs:
   build:
     name: Build APK zash
     runs-on: ubuntu-latest
     steps:
+      # -------------------- Checkout & Dependencies --------------------
       - name: Checkout source
         uses: actions/checkout@v3
         with:
-          ref: zash
+          ref: zash 
 
       - name: Install Build Tools and jq
-        run: sudo apt-get update && sudo apt-get install -y hub zipalign apksigner jq
+        run: sudo apt-get update && sudo apt-get install -y hub zipalign apksigner jq 
 
       - name: Setup java
         uses: actions/setup-java@v3
@@ -32,30 +33,55 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Download and prepare web assets (zashboard dist)
+      # -------------------- Fetch Latest Zashboard Release --------------------
+      - name: Check for new Zashboard release
+        id: check_new_release
+        run: |
+          ZASHBOARD_REPO="Zephyruso/zashboard"
+          LATEST_TAG=$(curl -sL "https://api.github.com/repos/$ZASHBOARD_REPO/releases/latest" | jq -r .tag_name)
+          if [ -z "$LATEST_TAG" ] || [ "$LATEST_TAG" == "null" ]; then
+            echo "::error::Could not fetch latest tag from $ZASHBOARD_REPO"
+            exit 1
+          fi
+          echo "LATEST_TAG=$LATEST_TAG" >> $GITHUB_OUTPUT
+
+          # 上一次构建的 tag (可通过 artifact 或 release 保存)
+          LAST_TAG_FILE="last_build_tag.txt"
+          LAST_TAG=$(cat $LAST_TAG_FILE 2>/dev/null || echo "")
+          echo "LAST_TAG=$LAST_TAG"
+
+          if [ "$LATEST_TAG" = "$LAST_TAG" ]; then
+            echo "No new release, skipping build."
+            exit 78
+
+          fi
+          echo "SAVED_TAG=$LATEST_TAG" >> $GITHUB_OUTPUT
+
+      # -------------------- Download Web Assets --------------------
+      - name: Download gh pages (zashboard dist)
         run: |
           wget https://github.com/Zephyruso/zashboard/releases/latest/download/dist.zip
-          unzip dist.zip -d www
-          rm dist.zip
+          unzip dist.zip
 
-      - name: Clean Android Directory Before Add/Sync
-        run: rm -rf android/
+      # -------------------- Capacitor & Android --------------------
+      - name: Add android folder if not present
+        run: if [ ! -d "./android" ]; then npx cap add android; fi
 
-      - name: Explicitly Add Android Platform
-        run: npx cap add android
+      - name: Capacitor update
+        run: npx cap update
 
-      - name: Capacitor Sync Android
-        run: npx cap sync android
+      - name: Capacitor copy
+        run: npx cap copy
 
-      - name: Generate icons and splash screen to android folder
+      - name: Generate icons and splash screen
         run: |
           if [ -d "./resources" ]; then
+            echo "Generating icons and splash screen..."
             npm install @capacitor/assets --save-dev
             npx capacitor-assets generate --android
+          else
+            echo "No resources folder found, skipping icon generation."
           fi
-
-      - name: Copy web assets and icons to Android
-        run: npx cap copy android
 
       - name: AndroidManifestModify
         run: |
@@ -63,52 +89,38 @@ jobs:
             cp AndroidManifest.xml android/app/src/main/AndroidManifest.xml
           fi
 
-      - name: Fetch Latest Tag from zashboard
-        id: get_zashboard_tag
-        run: |
-          ZASHBOARD_REPO="Zephyruso/zashboard"
-          LATEST_TAG=$(curl -sL "https://api.github.com/repos/$ZASHBOARD_REPO/releases/latest" | jq -r .tag_name)
-          if [ -z "$LATEST_TAG" ] || [ "$LATEST_TAG" == "null" ]; then
-            echo "::error::Failed to fetch latest tag"
-            exit 1
-          fi
-          echo "LATEST_TAG=$LATEST_TAG" >> $GITHUB_OUTPUT
+      - name: Build app
+        run: cd android && ./gradlew assembleRelease
 
-      - name: Generate versionCode and versionName
-        id: versioning
-        run: |
-          VERSION_NAME="${{ steps.get_zashboard_tag.outputs.LATEST_TAG }}"
-          VERSION_CODE=$(date +%s)
-          echo "VERSION_NAME=$VERSION_NAME" >> $GITHUB_OUTPUT
-          echo "VERSION_CODE=$VERSION_CODE" >> $GITHUB_OUTPUT
-
-      - name: Build unsigned app with version
-        run: |
-          cd android
-          ./gradlew assembleRelease -PVERSION_NAME=${{ steps.versioning.outputs.VERSION_NAME }} -PVERSION_CODE=${{ steps.versioning.outputs.VERSION_CODE }}
-
-      - name: Extract Android signing key from env
+      - name: Extract Android signing key
         run: |
           echo "${{ secrets.RELEASE_KEYSTORE }}" > android/release.jks.base64
           base64 -d android/release.jks.base64 > android/release.decrypted.jks
 
-      - name: Sign release build
+      - name: Sign APK
         run: |
-          UNSIGNED_APK="./android/app/build/outputs/apk/release/app-release-unsigned.apk"
-          ALIGNED_APK="./android/app/build/outputs/apk/release/app-release-unsigned-aligned.apk"
-          SIGNED_APK="./android/app/build/outputs/apk/release/app-release-signed.apk"
-          zipalign -v 4 "$UNSIGNED_APK" "$ALIGNED_APK"
-          apksigner sign \
-            --ks android/release.decrypted.jks \
+          zipalign -v 4 ./android/app/build/outputs/apk/release/app-release-unsigned.apk ./android/app/build/outputs/apk/release/app-release-unsigned-aligned.apk
+          apksigner sign --ks android/release.decrypted.jks \
             --ks-key-alias release \
             --ks-pass pass:${{ secrets.RELEASE_KEYSTORE_PASSWORD }} \
-            --out "$SIGNED_APK" \
-            "$ALIGNED_APK"
+            --out ./android/app/build/outputs/apk/release/app-release-signed.apk \
+            ./android/app/build/outputs/apk/release/app-release-unsigned-aligned.apk
 
-      - name: Rename Signed APK
+      # -------------------- Tag & Timestamp --------------------
+      - name: Set Build Timestamp
+        id: current-datetime
+        run: echo "CURRENT_DATETIME=$(date +'%Y-%m-%d-%H_%M_%S%z')" >> "$GITHUB_OUTPUT"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-output-${{ steps.check_new_release.outputs.SAVED_TAG }}-${{ steps.current-datetime.outputs.CURRENT_DATETIME }}
+          path: ./android/app/build/outputs/apk/release/
+
+      - name: Rename APK
         id: rename_apk
         run: |
-          VERSION_NAME="${{ steps.versioning.outputs.VERSION_NAME }}"
+          VERSION_NAME="${{ steps.check_new_release.outputs.SAVED_TAG }}"
           SOURCE_APK="./android/app/build/outputs/apk/release/app-release-signed.apk"
           SANITIZED_VERSION_NAME=$(echo "$VERSION_NAME" | sed 's/[^a-zA-Z0-9._-]/_/g')
           FINAL_APK_NAME="Azlaneui-${SANITIZED_VERSION_NAME}.apk"
@@ -119,11 +131,24 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           tag_name: latest-zashboard
-          name: Azlaneui ${{ steps.versioning.outputs.VERSION_NAME }} (zash)
+          name: Azlaneui ${{ steps.check_new_release.outputs.SAVED_TAG }} (zash)
           body: |
-            Android build corresponding to zashboard release tag: **${{ steps.versioning.outputs.VERSION_NAME }} (zash)**
+            Android build corresponding to zashboard release tag: **${{ steps.check_new_release.outputs.SAVED_TAG }} (zash)**
+            Generated by GitHub Actions run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            Triggered by: ${{ github.actor }}
+            Build Timestamp: ${{ steps.current-datetime.outputs.CURRENT_DATETIME }}
           files: ${{ steps.rename_apk.outputs.FINAL_APK_PATH }}
           prerelease: false
           draft: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # -------------------- Update Last Build Tag --------------------
+      - name: Save last build tag
+        run: |
+          echo "${{ steps.check_new_release.outputs.SAVED_TAG }}" > last_build_tag.txt
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add last_build_tag.txt
+          git commit -m "Update last build tag to ${{ steps.check_new_release.outputs.SAVED_TAG }}"
+          git push
